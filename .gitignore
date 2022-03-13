@@ -1,2 +1,5 @@
 
 project.ipynb
+/train_subset.csv
+/validation.csv
+/model/
