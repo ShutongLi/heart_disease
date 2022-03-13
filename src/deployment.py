@@ -1,4 +1,5 @@
 from src.model import BaseMLP
+from src.model2 import BaseMLP2
 from src.custom_dataset import CustomDataset
 from src import FocalLoss
 import torch
@@ -7,11 +8,12 @@ from torch.utils.data import DataLoader
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, f1_score, roc_auc_score
 
 
 # training baseMLP with simple hold-out CV
-def train_mlp(train_df: pd.DataFrame, val_df: pd.DataFrame, batch_size=10, num_iter=100, gamma=0, alpha=None, gpu=False):
+def train_mlp(train_df: pd.DataFrame, val_df: pd.DataFrame, criterion = 'focal', lr = 1e-4,
+              batch_size=10, num_iter=100, gamma=0, alpha=None, gpu=False,model=1):
     """
     :param train_df: dataframe of training data
     :param val_df: dataframe of validation data
@@ -21,10 +23,17 @@ def train_mlp(train_df: pd.DataFrame, val_df: pd.DataFrame, batch_size=10, num_i
     :param gpu: specify to use GPU or CPU
     :return:
     """
-
-    net = BaseMLP(21)
-    loss_function = FocalLoss.FocalLoss(gamma=gamma)
-    optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)
+    if model == 1:
+        net = BaseMLP(21)
+    if model == 2:
+        net = BaseMLP2(21)
+    if criterion == 'focal':
+        loss_function = FocalLoss.FocalLoss(gamma=gamma, alpha=alpha)
+    elif criterion == 'ce':
+        loss_function = nn.CrossEntropyLoss()
+    elif criterion == 'w_focal':
+        loss_function = FocalLoss.WeightedFocalLoss(gamma=gamma, alpha=alpha)
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
 
     if gpu:
         if torch.cuda.is_available():
@@ -103,7 +112,7 @@ def train_mlp(train_df: pd.DataFrame, val_df: pd.DataFrame, batch_size=10, num_i
     return net, avg_train_loss, avg_val_loss
 
 
-def mlp_predict(net, data, use_gpu=True):
+def mlp_predict(net, data, use_gpu=True, return_prob = False):
     """
     this function is only used for non-batched prediction tasks.
     :param net: the model
@@ -130,12 +139,15 @@ def mlp_predict(net, data, use_gpu=True):
         logit.to(device)
     net.eval()
     ps = net(inputs)
+    ps = logit(ps)
+    if return_prob:
+        return ps, torch.argmax(ps, dim=1), dataset.y_train
     return torch.argmax(logit(ps), dim=1), dataset.y_train
 
 
 # The pseudo run script that acts as a pipeline from training the model to presenting performance
-def mlp_run(train_df: pd.DataFrame, val_df: pd.DataFrame, batch_size=10, num_iter=100,
-            gamma=0, alpha=None, gpu=False):
+def mlp_run(train_df: pd.DataFrame, val_df: pd.DataFrame, batch_size=10, criterion = 'focal', lr = 1e-4,num_iter=100,
+            gamma=0, alpha=None, gpu=False, return_prediction=False, return_prob=False, model=1):
     """
     :param train_df:
     :param val_df:
@@ -154,9 +166,13 @@ def mlp_run(train_df: pd.DataFrame, val_df: pd.DataFrame, batch_size=10, num_ite
     else:
         dev = "cpu"
     device = torch.device(dev)
-    net, train_loss, val_loss = train_mlp(train_df, val_df, batch_size=batch_size, num_iter=num_iter, gamma=gamma,
+    net, train_loss, val_loss = train_mlp(train_df, val_df, batch_size=batch_size, num_iter=num_iter,
+                                          criterion=criterion,
+                                          gamma=gamma,
                                           alpha=alpha,
-                                          gpu=gpu)
+                                          lr=lr,
+                                          gpu=gpu,
+                                          model=model)
     x_axis = list(range(1, num_iter + 1))
     plt.plot(x_axis, train_loss, label='train_loss')
     plt.plot(x_axis, val_loss, label='val_loss')
@@ -165,16 +181,26 @@ def mlp_run(train_df: pd.DataFrame, val_df: pd.DataFrame, batch_size=10, num_ite
     # print('did plot show?')
     if gpu:
         net.to(device)
-    y_train_pred, y_train = mlp_predict(net, train_df, use_gpu=gpu)
-    y_val_pred, y_val = mlp_predict(net, val_df, use_gpu=gpu)
-    print(f'accuracy = {torch.mean((y_train_pred == y_train).type(torch.float))}')
-    print(f'accuracy = {torch.mean((y_val_pred == y_val).type(torch.float))}')
-    matrix_train = ConfusionMatrixDisplay(confusion_matrix(y_train, y_train_pred))
-    matrix_val = ConfusionMatrixDisplay(confusion_matrix(y_val, y_val_pred))
+    if return_prob:
+        y_train_p, y_train_pred, y_train = mlp_predict(net, train_df, use_gpu=gpu, return_prob=return_prob)
+        y_val_p, y_val_pred, y_val = mlp_predict(net, val_df, use_gpu=gpu, return_prob=return_prob)
+        print(f'roc-auc = {roc_auc_score(y_train, y_train_p.detach().numpy()[:, 1])}')
+        print(f'roc-auc = {roc_auc_score(y_val, y_val_p.detach().numpy()[:, 1])}')
+    else:
+        y_train_pred, y_train = mlp_predict(net, train_df, use_gpu=gpu)
+        y_val_pred, y_val = mlp_predict(net, val_df, use_gpu=gpu)
+    print(f'train accuracy = {torch.mean((y_train_pred == y_train).type(torch.float))}')
+    print(f'training f1 score = {f1_score(y_train, y_train_pred)}')
+    print(f'validation accuracy = {torch.mean((y_val_pred == y_val).type(torch.float))}')
+    print(f'validation f1 score = {f1_score(y_val, y_val_pred)}')
+    matrix_train = ConfusionMatrixDisplay(confusion_matrix(y_train, y_train_pred, normalize='true'))
+    matrix_val = ConfusionMatrixDisplay(confusion_matrix(y_val, y_val_pred, normalize='true'))
     matrix_train.plot()
     plt.show()
     matrix_val.plot()
     plt.show()
+    if return_prediction:
+        return net, y_train_pred, y_train, y_val_pred, y_val
     return net
 
 

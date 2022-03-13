@@ -37,3 +37,26 @@ class FocalLoss(nn.Module):
             return loss.mean()
         else:
             return loss.sum()
+
+
+# class WeightedFocalLoss(nn.Module):
+#     """
+#     Weighted version of Focal Loss
+#     """
+#     def __init__(self, alpha=.25, gamma=2):
+#         super(WeightedFocalLoss, self).__init__()
+#         if alpha:
+#             self.alpha = torch.tensor([alpha, 1-alpha])
+#         else:
+#             self.alpha = None
+#         self.gamma = gamma
+#
+#     def forward(self, inputs, targets):
+#         BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+#         targets = targets.type(torch.long)
+#         if self.alpha is not None:
+#             at = self.alpha.gather(0, targets.data.view(-1))
+#             BCE_loss = BCE_loss * Variable(at)
+#         pt = torch.exp(-BCE_loss)
+#         F_loss = (1-pt)**self.gamma * BCE_loss
+#         return F_loss.mean()
