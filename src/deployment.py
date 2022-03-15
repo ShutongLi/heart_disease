@@ -8,7 +8,9 @@ from torch.utils.data import DataLoader
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, f1_score, roc_auc_score
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, \
+    f1_score, roc_auc_score, recall_score, precision_score, \
+    PrecisionRecallDisplay, RocCurveDisplay, roc_curve
 
 
 # training baseMLP with simple hold-out CV
@@ -141,13 +143,15 @@ def mlp_predict(net, data, use_gpu=True, return_prob = False):
     ps = net(inputs)
     ps = logit(ps)
     if return_prob:
+        # print(ps)
         return ps, torch.argmax(ps, dim=1), dataset.y_train
     return torch.argmax(logit(ps), dim=1), dataset.y_train
 
 
 # The pseudo run script that acts as a pipeline from training the model to presenting performance
 def mlp_run(train_df: pd.DataFrame, val_df: pd.DataFrame, batch_size=10, criterion = 'focal', lr = 1e-4,num_iter=100,
-            gamma=0, alpha=None, gpu=False, return_prediction=False, return_prob=False, model=1):
+            gamma=0, alpha=None, gpu=False, return_prediction=False, return_prob=True, model=1,
+            test=None):
     """
     :param train_df:
     :param val_df:
@@ -184,24 +188,73 @@ def mlp_run(train_df: pd.DataFrame, val_df: pd.DataFrame, batch_size=10, criteri
     if return_prob:
         y_train_p, y_train_pred, y_train = mlp_predict(net, train_df, use_gpu=gpu, return_prob=return_prob)
         y_val_p, y_val_pred, y_val = mlp_predict(net, val_df, use_gpu=gpu, return_prob=return_prob)
-        print(f'roc-auc = {roc_auc_score(y_train, y_train_p.detach().numpy()[:, 1])}')
-        print(f'roc-auc = {roc_auc_score(y_val, y_val_p.detach().numpy()[:, 1])}')
+        y_train_p = y_train_p.detach().numpy()[:, 1]
+        y_val_p = y_val_p.detach().numpy()[:, 1]
+        print(f'roc-auc = {roc_auc_score(y_train, y_train_p)}')
+        print(f'roc-auc = {roc_auc_score(y_val, y_val_p)}')
+        if test is not None:
+            # simple aliasing
+            test_df = test
+            y_test_p, y_test_pred, y_test = mlp_predict(net, test_df,
+                                                        use_gpu=gpu, return_prob=return_prob)
+            y_test_p = y_test_p.detach().numpy()[:, 1]
+            print(f'roc-auc = {roc_auc_score(y_test, y_test_p)}')
     else:
         y_train_pred, y_train = mlp_predict(net, train_df, use_gpu=gpu)
         y_val_pred, y_val = mlp_predict(net, val_df, use_gpu=gpu)
     print(f'train accuracy = {torch.mean((y_train_pred == y_train).type(torch.float))}')
     print(f'training f1 score = {f1_score(y_train, y_train_pred)}')
+    print(f'training precision = {precision_score(y_train, y_train_pred)}')
+    print(f'training recall = {recall_score(y_train, y_train_pred)}')
+
     print(f'validation accuracy = {torch.mean((y_val_pred == y_val).type(torch.float))}')
     print(f'validation f1 score = {f1_score(y_val, y_val_pred)}')
+    print(f'validation precision = {precision_score(y_val, y_val_pred)}')
+    print(f'validation recall = {recall_score(y_val, y_val_pred)}')
+
+    if test is not None:
+        print(f'test accuracy = {torch.mean((y_test_pred == y_test).type(torch.float))}')
+        print(f'test f1 score = {f1_score(y_test, y_test_pred)}')
+        print(f'test precision = {precision_score(y_test, y_test_pred)}')
+        print(f'test recall = {recall_score(y_test, y_test_pred)}')
     matrix_train = ConfusionMatrixDisplay(confusion_matrix(y_train, y_train_pred, normalize='true'))
     matrix_val = ConfusionMatrixDisplay(confusion_matrix(y_val, y_val_pred, normalize='true'))
+
+
     matrix_train.plot()
     plt.show()
     matrix_val.plot()
     plt.show()
+    if test is not None:
+        matrix_test = ConfusionMatrixDisplay(confusion_matrix(y_test, y_test_pred, normalize='true'))
+        matrix_test.plot()
+        plt.show()
+
+    RocCurveDisplay.from_predictions(y_train, y_train_p)
+    plt.show()
+    PrecisionRecallDisplay.from_predictions(y_train, y_train_p)
+    plt.show()
+    RocCurveDisplay.from_predictions(y_val, y_val_p)
+    plt.show()
+    PrecisionRecallDisplay.from_predictions(y_val, y_val_p)
+    plt.show()
+
+    if test is not None:
+        RocCurveDisplay.from_predictions(y_test, y_test_p)
+        plt.show()
+        PrecisionRecallDisplay.from_predictions(y_test, y_test_p)
+        plt.show()
+
     if return_prediction:
         return net, y_train_pred, y_train, y_val_pred, y_val
-    return net
+    result_dict = {'lr': lr, 'num_epochs':num_iter, 'model':model, 'criterion': criterion, 'alpha': alpha,
+                   'gamma': gamma, 'f1': f1_score(y_val, y_val_pred),
+                   'precision': precision_score(y_val, y_val_pred),
+                   'recall': recall_score(y_val, y_val_pred),
+                   'roc_score': roc_auc_score(y_val, y_val_p),
+                   'roc_curve': roc_curve(y_val, y_val_p)
+                   }
+    return result_dict
 
 
 
